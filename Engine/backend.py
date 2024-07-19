@@ -57,7 +57,7 @@ class LMBackend:
         position_ids = torch.arange(seq_len, device=self.device).unsqueeze(0).repeat(self.batch_size,1)
         division = seq_len > 1000
         if division:
-            chunk_size = 32
+            chunk_size = 1
             num_chunks = (seq_len + chunk_size - 1) // chunk_size  # Ceil division
             for i in range(num_chunks):
                 start_idx = i * chunk_size

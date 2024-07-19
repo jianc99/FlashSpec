@@ -197,10 +197,7 @@ def _apply_tp_Transformer(Transformer: Transformer, rank_group) -> None:
 
 def apply_tp(model: Transformer, rank_group, group) -> None:
     _apply_tp_Transformer(model, rank_group)
-    world_size = _get_world_size()
-    # p_group = dist.new_group(list(range(world_size)))
-    p_group = dist.group.WORLD
     for block in model.layers:
         # Apply to MLP
-        _apply_tp_ffn(block.feed_forward, rank_group, p_group)
-        _apply_tp_attn(block.attention, rank_group, model.config, p_group)
+        _apply_tp_ffn(block.feed_forward, rank_group, group)
+        _apply_tp_attn(block.attention, rank_group, model.config, group)
