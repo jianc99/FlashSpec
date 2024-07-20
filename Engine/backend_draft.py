@@ -58,7 +58,7 @@ class LMBackend_Draft:
         self.clear_kv()
         logits = None
         seq_len = input_ids.shape[1]
-        chunk_size = 1
+        chunk_size = 32
         num_chunks = (seq_len + chunk_size - 1) // chunk_size  # Ceil division
         for i in range(num_chunks):
             is_last = i == num_chunks-1
