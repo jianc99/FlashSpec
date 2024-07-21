@@ -15,7 +15,6 @@ else:
     # Distributed is not supported on MacOS
     funcol = None
 
-from FlashSpec.Engine.model import Attention, FeedForward, Transformer
 from itertools import accumulate
 
 
@@ -149,7 +148,7 @@ def _apply_tp_linear_mlp(linear: nn.Linear, style: str, weight_splits: List[int]
     # assert linear.weight.shape == (linear.out_features, linear.in_features)
 
 
-def _apply_tp_ffn(mlp: FeedForward, rank_group, group) -> None:
+def _apply_tp_ffn(mlp, rank_group, group) -> None:
     assert hasattr(mlp, "w1")
     assert hasattr(mlp, "w3")
     assert hasattr(mlp, "w2")
@@ -158,12 +157,11 @@ def _apply_tp_ffn(mlp: FeedForward, rank_group, group) -> None:
     _apply_tp_linear_mlp(mlp.w3, "colwise", rank_group=rank_group)
     _apply_tp_linear_mlp(mlp.w2, "rowwise", rank_group=rank_group)
     mlp.process_group = group
-
     # mlp.register_forward_hook(lambda _module, _input, output: funcol.all_reduce(
     #     output, "sum", group))
 
 
-def _apply_tp_attn(attn: Attention, rank_group, config, group) -> None:
+def _apply_tp_attn(attn, rank_group, config, group) -> None:
     assert hasattr(attn, "wqkv")
     assert hasattr(attn, "wo")
 
@@ -181,7 +179,7 @@ def _apply_tp_attn(attn: Attention, rank_group, config, group) -> None:
     #     output, "sum", group))
 
 
-def _apply_tp_Transformer(Transformer: Transformer, rank_group) -> None:
+def _apply_tp_Transformer(Transformer, rank_group) -> None:
     # overwrite config before Transformer.setup_cache is called
     num_heads = Transformer.config.n_head
     num_kv_heads = Transformer.config.n_local_heads
@@ -195,9 +193,8 @@ def _apply_tp_Transformer(Transformer: Transformer, rank_group) -> None:
     Transformer.config.n_local_heads = local_num_kv_heads
 
 
-def apply_tp(model: Transformer, rank_group, group) -> None:
+def apply_tp(model, rank_group, group) -> None:
     _apply_tp_Transformer(model, rank_group)
     for block in model.layers:
-        # Apply to MLP
         _apply_tp_ffn(block.feed_forward, rank_group, group)
         _apply_tp_attn(block.attention, rank_group, model.config, group)

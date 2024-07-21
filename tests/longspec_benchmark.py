@@ -266,14 +266,14 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     torch.cuda.synchronize()
     end=time.perf_counter()
     total_time += end-start
-    num_gen_tokens += (num_nodes.sum() - input_ids.shape[1]*BATCH_SIZE)
+    num_gen_tokens += (num_nodes.sum() - (input_ids.shape[1]+1)*BATCH_SIZE)
     if args.printoutput:
         for i in range(BATCH_SIZE):
             print(tokenizer.decode(output[i, args.prefix_len:num_nodes[i]]))
     print("total time :{:.5f}s, time per iter :{:.5f}s, decoding step: {}, large model step: {}".format(total_time, total_time / target_steps, num_gen_tokens, target_steps))
     if benchmark:
         print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE))
-    if step < 10:
+    if step < 2:
         total_time = 0.0
         num_gen_tokens = 0
         target_steps = 0
