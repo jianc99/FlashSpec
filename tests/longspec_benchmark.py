@@ -6,7 +6,7 @@ from pathlib import Path
 import torch.distributed as dist
 from FlashSpec.Engine.utils import setup_seed, cuda_graph_for_sampling_argmax_batch, sampling_argmax_batch
 from FlashSpec.Data.data_converter import convert_pg19_dataset
-from transformers import LlamaTokenizer
+from transformers import AutoTokenizer
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 import argparse
@@ -15,6 +15,7 @@ from FlashSpec.Engine.backend_draft import LMBackend_Draft
 
 parser = argparse.ArgumentParser(description='Process model configuration and partitions.')
 parser.add_argument('--model', type=Path, default=Path("checkpoints/meta-llama/Llama-2-7b-hf/model.pth"), help='model')
+parser.add_argument('--model_name', type=str, default="meta-llama/Llama-2-7b-hf", help='model name')
 parser.add_argument('--draft_ranks', nargs='+', type=int, help='Target group of ranks')
 parser.add_argument('--streamingllm_budget', type=int, default=256, help='Dataset end index.')
 
@@ -35,7 +36,7 @@ parser.add_argument('--benchmark', action='store_true', help='Whether to compile
 
 # Assert max length <= max context length
 args = parser.parse_args()
-assert args.prefix_len + args.gen_len + args.gamma + 1 <= 4096
+# assert args.prefix_len + args.gen_len + args.gamma + 1 <= 4096
 
 # Init model parallelism
 draft_tp = len(args.draft_ranks) > 1
@@ -68,10 +69,14 @@ target_dec_list = [args.gamma + 1]
 # Load target model
 engine = LMBackend(dtype=DTYPE, device=DEVICE, dec_list=target_dec_list)
 engine.load_model(checkpoint_path, use_tp=use_tp, rank_group = args.rank_group, group=global_group)
+
+assert args.prefix_len + args.gen_len + args.gamma + 1 <= engine.model.config.block_size, f"Model block_size is {engine.model.config.block_size}, but max_gen+gamma+1 is {args.prefix_len + args.gen_len + args.gamma + 1}"
+vocab_size = engine.model.config.vocab_size
+
 if args.compile:
     engine.compile()
 engine.setup_caches(max_batch_size=BATCH_SIZE, max_seq_length=MAX_LEN_TARGET)
-target_sample = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=args.gamma+1)
+target_sample = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=args.gamma+1, dim=vocab_size)
 
 # Load draft model
 if not use_tp:
@@ -82,7 +87,7 @@ if not use_tp:
     draft.setup_caches(max_batch_size=BATCH_SIZE, max_seq_length=MAX_LEN_DRAFT, kv_len=args.streamingllm_budget)
     draft_sample = {}
     for i in [1, 2]:
-        draft_sample[i] = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=i)
+        draft_sample[i] = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=i, dim=vocab_size)
 else:
     if rank in args.draft_ranks:
         draft = LMBackend_Draft(dtype=DTYPE, device=DEVICE, dec_list=[1,2])
@@ -92,13 +97,15 @@ else:
         draft.setup_caches(max_batch_size=BATCH_SIZE, max_seq_length=MAX_LEN_DRAFT, kv_len=args.streamingllm_budget)
         draft_sample = {}
         for i in [1, 2]:
-            draft_sample[i] = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=i)
+            draft_sample[i] = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=i, dim=vocab_size)
     dist.barrier()
 
 # Load dataset
-tokenizer = LlamaTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 tokenizer.pad_token = tokenizer.eos_token
-dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len)
+repeats = 20
+no_runs = int(BATCH_SIZE*repeats)
+dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len, end=no_runs)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
 num_eval_steps = len(dataloader)
 
