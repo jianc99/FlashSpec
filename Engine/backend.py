@@ -104,7 +104,7 @@ class LMBackend:
         logits = None
         seq_len = input_ids.shape[1]
         position_ids = torch.arange(seq_len, device=self.device).unsqueeze(0).repeat(self.batch_size,1)
-        division = seq_len > 10000
+        division = seq_len > 512
         if division:
             chunk_size = 32
             num_chunks = (seq_len + chunk_size - 1) // chunk_size  # Ceil division
