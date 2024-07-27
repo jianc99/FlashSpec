@@ -49,6 +49,7 @@ llm.setup_caches(max_batch_size=max_batch_size, max_seq_length=max_seq_length)
 
 prompt = torch.randint(low=3, high=30000, size=(max_batch_size, prefix_len), device=device)
 llm.encode(input_ids=prompt)
+print("finish encode")
 
 for declen in dec_list:
     dec = torch.randint(low=3, high=30000, size=(max_batch_size, declen), device=device)

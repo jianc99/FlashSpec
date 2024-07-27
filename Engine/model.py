@@ -66,13 +66,28 @@ transformer_configs = {
     "llama-160m": dict(block_size=2048, n_layer=12, n_head=12, n_local_heads=12, dim=768, intermediate_size=3072, vocab_size=32000),
     "1.3b": dict(block_size =2048, n_layer=24, n_head=16, n_local_heads=16, dim=2048, intermediate_size=5504, vocab_size=32000),
     "tinyllama": dict(block_size =2048, n_layer=22, n_head=32, n_local_heads=4, dim=2048, intermediate_size=5632, vocab_size=32000),
+    "Llama-3-8B-Instruct-Gradient-1048k": dict(block_size=1048576, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=3580165449),
 }
 class KVCache(nn.Module):
     def __init__(self, max_batch_size, max_seq_length, n_heads, head_dim, dtype=torch.bfloat16):
         super().__init__()
-        cache_shape = (max_batch_size, max_seq_length, n_heads, head_dim)
-        self.register_buffer('k_cache', torch.zeros(cache_shape, dtype=dtype))
-        self.register_buffer('v_cache', torch.zeros(cache_shape, dtype=dtype))
+        cache_shape = (max_batch_size, 2, max_seq_length, n_heads, head_dim)
+        self.register_buffer('kv_cache', torch.zeros(cache_shape, dtype=dtype))
+        self.kv_page_indices = torch.arange(max_batch_size, dtype=torch.int32)
+        self.kv_page_indptr = torch.arange(max_batch_size+1, dtype=torch.int32)
+        self.kv_append_indptr = torch.arange(max_batch_size+1, dtype=torch.int32)
+        self.bsz = max_batch_size
+        
+    def update(self, k, v, cachelen):
+        return torch.ops.mylib.update_kv(
+            k,
+            v,
+            self.kv_append_indptr*(k.shape[0]//self.bsz),
+            self.kv_cache,
+            self.kv_page_indices,
+            self.kv_page_indptr,
+            cachelen
+        )
 
 class Transformer(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
@@ -85,7 +100,7 @@ class Transformer(nn.Module):
         self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
 
         self.freqs_cis: Optional[Tensor] = None
-        self.mask_cache: Optional[Tensor] = None
+
         self.max_batch_size = -1
         self.max_seq_length = -1
 
@@ -93,27 +108,38 @@ class Transformer(nn.Module):
         if self.max_seq_length >= max_seq_length and self.max_batch_size >= max_batch_size:
             return
         head_dim = self.config.dim // self.config.n_head
-        # max_seq_length = find_multiple(max_seq_length, 8)
         self.max_seq_length = max_seq_length
         self.max_batch_size = max_batch_size
         dtype = self.output.weight.dtype
+
         # For quantized layers, dtype is encoded in scales
         if hasattr(self.output, "scales"):
             dtype = self.output.scales.dtype
         elif hasattr(self.output, "scales_and_zeros"):
             dtype = self.output.scales_and_zeros.dtype
+
         for b in self.layers:
             b.attention.kv_cache = KVCache(max_batch_size, max_seq_length, self.config.n_local_heads, head_dim, dtype)
-
+            b.attention.attn_forward_decode = torch.ops.mylib.target_decode
+            b.attention.attn_forward_prefill = torch.ops.mylib.target_prefill
+        
         self.freqs_cis = precompute_freqs_cis(self.config.block_size, self.config.dim // self.config.n_head, self.config.rope_base, dtype)
 
-    def forward(self, idx: Tensor, input_pos: Optional[Tensor], cache_seqlens: Tensor) -> Tensor:
-        assert self.freqs_cis is not None, "Caches must be initialized first"
-
+    def forward(self, idx: Tensor, cache_seqlens: Tensor, input_pos: Tensor) -> Tensor:
         freqs_cis = self.freqs_cis[input_pos]
         x = self.tok_embeddings(idx)
         for i, layer in enumerate(self.layers):
-            x = layer(x, freqs_cis, cache_seqlens)
+            x = layer(x, cache_seqlens, freqs_cis)
+        x = self.norm(x)
+        logits = self.output(x)
+        return logits
+
+
+    def prefill(self, idx: Tensor, cache_seqlens: Tensor, input_pos: Tensor) -> Tensor:
+        freqs_cis = self.freqs_cis[input_pos]
+        x = self.tok_embeddings(idx)
+        for i, layer in enumerate(self.layers):
+            x = layer.prefill(x, cache_seqlens, freqs_cis)
         x = self.norm(x)
         logits = self.output(x)
         return logits
@@ -121,7 +147,6 @@ class Transformer(nn.Module):
     @classmethod
     def from_name(cls, name: str):
         return cls(ModelArgs.from_name(name))
-
 
 class TransformerBlock(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
@@ -131,8 +156,13 @@ class TransformerBlock(nn.Module):
         self.ffn_norm = RMSNorm(config.dim, config.norm_eps)
         self.attention_norm = RMSNorm(config.dim, config.norm_eps)
 
-    def forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor) -> Tensor:
-        h = x + self.attention(self.attention_norm(x), freqs_cis, cache_seqlens)
+    def forward(self, x: Tensor, cache_seqlens: Tensor, freqs_cis: Tensor,) -> Tensor:
+        h = x + self.attention(self.attention_norm(x), cache_seqlens, freqs_cis)
+        out = h + self.feed_forward(self.ffn_norm(h))
+        return out
+    
+    def prefill(self, x: Tensor, cache_seqlens: Tensor, freqs_cis: Tensor,) -> Tensor:
+        h = x + self.attention.prefill(self.attention_norm(x), cache_seqlens, freqs_cis)
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
 
@@ -146,8 +176,11 @@ class Attention(nn.Module):
         # key, query, value projections for all heads, but in a batch
         self.wqkv = nn.Linear(config.dim, total_head_dim, bias=False)
         self.wo = nn.Linear(config.dim, config.dim, bias=False)
+
         self.kv_cache = None
         self.process_group = None
+        self.attn_forward_decode = None
+        self.attn_forward_prefill = None
 
         self.n_head = config.n_head
         self.head_dim = config.head_dim
@@ -162,25 +195,48 @@ class Attention(nn.Module):
             wv = state_dict.pop(prefix + "wv.weight")
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
 
-    def forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor) -> Tensor:
-        bsz, seqlen, _ = x.shape
+    def forward(self, x: Tensor, cache_seqlens: Tensor, freqs_cis: Tensor) -> Tensor:
+        seqlen, _ = x.shape
 
         kv_size = self.n_local_heads * self.head_dim
         q, k, v = self.wqkv(x).split([self.dim, kv_size, kv_size], dim=-1)
 
-        q = q.view(bsz, seqlen, self.n_head, self.head_dim)
-        k = k.view(bsz, seqlen, self.n_local_heads, self.head_dim)
-        v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim)
+        q = q.contiguous().view(seqlen, self.n_head, self.head_dim)
+        k = k.contiguous().view(seqlen, self.n_local_heads, self.head_dim)
+        v = v.contiguous().view(seqlen, self.n_local_heads, self.head_dim)
 
         q = apply_rotary_emb(q, freqs_cis)
         k = apply_rotary_emb(k, freqs_cis)
 
-        if self.kv_cache is not None:
-            k_cache, v_cache = self.kv_cache.k_cache, self.kv_cache.v_cache
+        kv_cahce = self.kv_cache.update(k, v, cache_seqlens)
 
-        y = torch.ops.mylib.custom_func(q, k_cache, v_cache, k, v, cache_seqlens)
+        y = self.attn_forward_decode(q, kv_cahce)
 
-        y = y.contiguous().view(bsz, seqlen, self.dim)
+        y = y.contiguous().view(seqlen, self.dim)
+
+        y = self.wo(y)
+        if self.process_group != None:
+            dist.all_reduce(y, group = self.process_group)
+        return y
+    
+    def prefill(self, x: Tensor, cache_seqlens: Tensor, freqs_cis: Tensor) -> Tensor:
+        seqlen, _ = x.shape
+
+        kv_size = self.n_local_heads * self.head_dim
+        q, k, v = self.wqkv(x).split([self.dim, kv_size, kv_size], dim=-1)
+
+        q = q.contiguous().view(seqlen, self.n_head, self.head_dim)
+        k = k.contiguous().view(seqlen, self.n_local_heads, self.head_dim)
+        v = v.contiguous().view(seqlen, self.n_local_heads, self.head_dim)
+
+        q = apply_rotary_emb(q, freqs_cis)
+        k = apply_rotary_emb(k, freqs_cis)
+
+        kv_cahce = self.kv_cache.update(k, v, cache_seqlens)
+
+        y = self.attn_forward_prefill(q, kv_cahce)
+
+        y = y.contiguous().view(seqlen, self.dim)
 
         y = self.wo(y)
         if self.process_group != None:
@@ -231,7 +287,7 @@ def precompute_freqs_cis(
 
 def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
     xshaped = x.float().reshape(*x.shape[:-1], -1, 2)
-    freqs_cis = freqs_cis.view(x.shape[0], xshaped.size(1), 1, xshaped.size(3), 2)
+    freqs_cis = freqs_cis.view(xshaped.size(0), 1, xshaped.size(2), 2)
     x_out2 = torch.stack(
         [
             xshaped[..., 0] * freqs_cis[..., 0] - xshaped[..., 1] * freqs_cis[..., 1],
@@ -240,5 +296,5 @@ def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
         -1,
     )
 
-    x_out2 = x_out2.flatten(3)
+    x_out2 = x_out2.flatten(2)
     return x_out2.type_as(x)

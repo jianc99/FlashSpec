@@ -4,7 +4,7 @@ import sys
 sys.path.append("..")
 from pathlib import Path
 import torch.distributed as dist
-from FlashSpec.Engine.utils import setup_seed, sample
+from FlashSpec.Engine.utils import setup_seed, sample, sampling_argmax_batch
 from FlashSpec.Data.data_converter import convert_pg19_dataset
 from transformers import LlamaTokenizer
 from torch.utils.data.dataloader import DataLoader
@@ -64,14 +64,14 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     terminate = False
     output = input_ids.clone()
     logits = engine.encode(input_ids=input_ids)
-    next_tokens = sample(logits=logits[:,-1], top_p=args.top_p, T=args.temperature)
+    next_tokens = sampling_argmax_batch(logits[:,-1])
     output = torch.cat((output, next_tokens),dim=-1)
     torch.cuda.synchronize()
     t1 = time.perf_counter()
     while output.size(1)<args.M and terminate == False:
         input_ids=next_tokens.clone()
         logits = engine.inference(input_ids=input_ids)
-        next_tokens = sample(logits=logits[:,-1], top_p=args.top_p, T=args.temperature)
+        next_tokens = sampling_argmax_batch(logits[:,-1])
         output = torch.cat((output, next_tokens),dim=-1)
         model_steps += 1
         if (next_tokens[:,-1] == 2)._is_any_true() or (next_tokens[:,-1] == 0)._is_any_true(): terminate = True
@@ -80,7 +80,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 
     if args.printoutput:
         for i in range(BATCH_SIZE):
-            print(tokenizer.decode(output[i]))
+            print(tokenizer.decode(output[i, 4000:]))
             
     total_time += t2-t1
     print(f"Tokens per second :{total_time/model_steps}")

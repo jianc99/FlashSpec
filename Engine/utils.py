@@ -2,37 +2,45 @@ import torch
 import numpy as np
 import random
 from torch.nn.functional import softmax
-from flash_attn import flash_attn_with_kvcache
+import flashinfer
 
 torch.library.define(
-    "mylib::custom_func",
-    "(Tensor q, Tensor(a!) k_cache, Tensor(a!) v_cache, Tensor k, Tensor v, Tensor cache_seqlens) -> Tensor",
+    "mylib::update_kv",
+    "(Tensor k, Tensor v, Tensor kv_append_indptr, Tensor(a!) kv_cache, Tensor kv_page_indices, Tensor kv_page_indptr, Tensor cachelen) -> Tensor",
 )
 
-@torch.library.impl("mylib::custom_func", "cuda")
-def custom_func(q, k_cache, v_cache, k, v, cache_seqlens):
-    return flash_attn_with_kvcache(
-        q, k_cache, v_cache, k=k, v=v, cache_seqlens=cache_seqlens, causal=True
-    )
+@torch.library.impl("mylib::update_kv", "cuda")
+def update_kv(
+            k,
+            v,
+            kv_append_indptr,
+            kv_cache,
+            kv_page_indices,
+            kv_page_indptr,
+            cachelen
+        ):
+        flashinfer.append_paged_kv_cache(
+            k,
+            v,
+            kv_append_indptr,
+            kv_cache,
+            kv_page_indices,
+            kv_page_indptr,
+            cachelen
+        )
+        return kv_cache
 
-@torch.library.register_fake("mylib::custom_func")
-def custom_func_abstract(q, k_cache, v_cache, k, v, cache_seqlens):
-    return torch.empty_like(q)
-
-torch.library.define(
-    "mylib::custom_func_2",
-    "(Tensor q, Tensor(a!) k_cache, Tensor(a!) v_cache) -> Tensor",
-)
-
-@torch.library.impl("mylib::custom_func_2", "cuda")
-def custom_func_2(q, k_cache, v_cache):
-    return flash_attn_with_kvcache(
-        q, k_cache, v_cache, causal=True
-    )
-
-@torch.library.register_fake("mylib::custom_func_2")
-def custom_func_2_abstract(q, k_cache, v_cache):
-    return torch.empty_like(q)
+@torch.library.register_fake("mylib::update_kv")
+def update_kv_abstract(
+            k,
+            v,
+            kv_append_indptr,
+            kv_cache,
+            kv_page_indices,
+            kv_page_indptr,
+            cachelen
+        ):
+    return torch.empty_like(kv_cache)
 
 def get_sampling_logits(logits :torch.Tensor, top_p:float, T: float, replicate = False):
     if replicate:

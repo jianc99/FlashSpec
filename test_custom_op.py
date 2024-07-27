@@ -196,102 +196,200 @@
 #     torch.cuda.synchronize()
 #     t2 = time.perf_counter()
 #     print((t2-t1)/1000)
-
-
 import torch
 import flashinfer
-num_layers = 2
-num_qo_heads = 4
-num_kv_heads = 1
+
+# with torch.device("cuda"):
+#     q = torch.randn((2, 2, 128), dtype=torch.bfloat16)
+#     k_cache = torch.randn((5, 2, 128), dtype=torch.bfloat16)
+#     v_cache = torch.randn((5, 2, 128), dtype=torch.bfloat16)
+
+# torch.compile(torch.ops.mylib.custom_func, fullgraph=True)(
+#     q, k_cache, v_cache
+# )
+
+# num_layers = 32
+# num_qo_heads = 32
+# num_kv_heads = 8
+# head_dim = 128
+# batch_size = 8
+# max_num_pages = batch_size
+# max_len = 256
+# page_size = max_len
+# dec_len = 1
+# # allocate 128MB workspace buffer
+# workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device="cuda:0")
+
+# qo_indptr = torch.tensor(
+#     [0, 33, 44, 55, 66, 77, 88, nnz_qo], dtype=torch.int32, device="cuda:0"
+# )
+# qo_indptr_buffer = torch.empty((1, dec_len+1))
+# paged_kv_indices = torch.arange(max_num_pages).int().to("cuda:0")
+# paged_kv_indptr = torch.tensor(
+#     [0, 1, 2, 3, 4, 5, 6, 7], dtype=torch.int32, device="cuda:0"
+# )
+# # 1 <= paged_kv_last_page_len <= page_size
+# paged_kv_last_page_len = torch.tensor(
+#     [1, 7, 14, 4, 3, 1, 16], dtype=torch.int32, device="cuda:0"
+# )
+# q_at_layer = torch.randn(num_layers, nnz_qo, num_qo_heads, head_dim).half().to("cuda:0")
+# kv_cache_at_layer = torch.zeros(
+#     num_layers, max_num_pages, 2, page_size, num_kv_heads, head_dim, dtype=torch.float16, device="cuda:0"
+# )
+
+
+# PREFILL_WRAPPER = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
+#     workspace_buffer, "NHD", use_cuda_graph=True, 
+#     qo_indptr_buf=qo_indptr, paged_kv_indptr_buf=paged_kv_indptr, 
+#     paged_kv_indices_buf=paged_kv_indices, 
+#     paged_kv_last_page_len_buf=paged_kv_last_page_len
+# )
+
+# torch.library.define(
+#     "mylib::custom_func",
+#     "(Tensor q, Tensor kv_cache) -> Tensor",
+# )
+
+# @torch.library.impl("mylib::custom_func", "cuda")
+# def custom_func(q, kv_cache):
+#     return PREFILL_WRAPPER.forward(
+#         q, kv_cache, pos_encoding_mode="ROPE_LLAMA", rope_theta=10000
+#     )
+
+# @torch.library.register_fake("mylib::custom_func")
+# def custom_func_abstract(q, kv_cache):
+#     return torch.empty_like(q)
+
+# forward = torch.compile(torch.ops.mylib.custom_func, fullgraph=True)
+
+# # create auxiliary data structures for batch prefill attention
+# PREFILL_WRAPPER.begin_forward(
+#     qo_indptr,
+#     paged_kv_indptr,
+#     paged_kv_indices,
+#     paged_kv_last_page_len,
+#     num_qo_heads,
+#     num_kv_heads,
+#     head_dim,
+#     page_size,
+# )
+# outputs = []
+# PREFILL_WRAPPER.forward()
+# for i in range(num_layers):
+#     q = q_at_layer[i]
+#     kv_cache = kv_cache_at_layer[i]
+#     o = forward(q, kv_cache)
+#     outputs.append(o)
+
+# # clear auxiliary data structures
+# PREFILL_WRAPPER.end_forward()
+# print(outputs[0].shape)
+
+
+
+# import torch
+# import flashinfer
+# nnz_kv = 10
+# num_kv_heads = 4
+# head_dim = 128
+# k_append = torch.randn(nnz_kv, num_kv_heads, head_dim).half().to(0)
+# v_append = torch.randn(nnz_kv, num_kv_heads, head_dim).half().to(0)
+# # 45 + 8 + 25 + 22 = nnz_kv
+# kv_append_length = torch.tensor([2, 3, 4, 1], dtype=torch.int32, device="cuda:0")
+# kv_append_indptr = torch.cat(
+#     [torch.zeros(1).int().to(0), torch.cumsum(kv_append_length, dim=0)]
+# ).int()
+# max_num_pages = 4
+# page_size = 256
+# paged_kv_cache = torch.zeros(max_num_pages, 2, page_size, num_kv_heads, head_dim).half().to(0)
+# num_pages_per_req = torch.tensor([1, 1, 1, 1], dtype=torch.int32, device="cuda:0")
+# kv_page_indptr = torch.cat(
+#     [torch.zeros(1).int().to(0), torch.cumsum(num_pages_per_req, dim=0)]
+# ).int()
+# # use first 8 pages in the paged-kv
+# kv_page_indices = torch.arange(4, dtype=torch.int32, device="cuda:0")
+# # 45 = (3 - 1) * 16 + 13
+# # 8 = (1 - 1) * 16 + 8
+# # 25 = (2 - 1) * 16 + 9
+# # 22 = (2 - 1) * 16 + 6
+# kv_last_page_len = torch.tensor([3, 4, 4, 3], dtype=torch.int32, device="cuda:0")
+
+
+# flashinfer.append_paged_kv_cache(
+#     k_append,
+#     v_append,
+#     kv_append_indptr,
+#     paged_kv_cache,
+#     kv_page_indices,
+#     kv_page_indptr,
+#     kv_last_page_len
+# )
+import random
+seed=1234
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+random.seed(seed)
+torch.backends.cudnn.deterministic = True
+
+
+from flash_attn import flash_attn_with_kvcache
+
+max_batch_size = 2
+dec_len = 20
+device = torch.device("cuda:0")
+decode_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=device)
+qo_indptr = torch.arange(max_batch_size+1, dtype=torch.int32, device=device)
+paged_kv_indptr = torch.arange(max_batch_size+1, dtype=torch.int32, device=device)
+paged_kv_indices = torch.arange(max_batch_size, dtype=torch.int32, device=device)
+paged_kv_last_page_len = torch.zeros((max_batch_size), dtype=torch.int32, device=device)
+decode_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(decode_buffer, "NHD", use_cuda_graph=True,
+                                                                        qo_indptr_buf=qo_indptr.clone(), 
+                                                                        paged_kv_indptr_buf = paged_kv_indptr.clone(), 
+                                                                        paged_kv_indices_buf=paged_kv_indices.clone(), 
+                                                                        paged_kv_last_page_len_buf=paged_kv_last_page_len.clone())
+
+num_layers = 32
+num_qo_heads = 32
+num_kv_heads = 32
 head_dim = 128
-batch_size = 7
-max_num_pages = batch_size
-max_len = 256
-page_size = max_len
-# allocate 128MB workspace buffer
-workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device="cuda:0")
-nnz_qo = 100
-qo_indptr = torch.tensor(
-    [0, 33, 44, 55, 66, 77, 88, nnz_qo], dtype=torch.int32, device="cuda:0"
-)
-paged_kv_indices = torch.arange(max_num_pages).int().to("cuda:0")
-paged_kv_indptr = torch.tensor(
-    [0, 1, 2, 3, 4, 5, 6, 7], dtype=torch.int32, device="cuda:0"
-)
-# 1 <= paged_kv_last_page_len <= page_size
-paged_kv_last_page_len = torch.tensor(
-    [1, 7, 14, 4, 3, 1, 16], dtype=torch.int32, device="cuda:0"
-)
-q_at_layer = torch.randn(num_layers, nnz_qo, num_qo_heads, head_dim).half().to("cuda:0")
-kv_cache_at_layer = torch.zeros(
-    num_layers, max_num_pages, 2, page_size, num_kv_heads, head_dim, dtype=torch.float16, device="cuda:0"
-)
+max_len = 4096
 
-prefill_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
-    workspace_buffer, "NHD", use_cuda_graph=True, qo_indptr_buf=qo_indptr, paged_kv_indptr_buf=paged_kv_indptr, paged_kv_indices_buf=paged_kv_indices, paged_kv_last_page_len_buf=paged_kv_last_page_len
-)
-
-# create auxiliary data structures for batch prefill attention
-prefill_wrapper.begin_forward(
-    qo_indptr,
-    paged_kv_indptr,
-    paged_kv_indices,
-    paged_kv_last_page_len,
-    num_qo_heads,
-    num_kv_heads,
-    head_dim,
-    page_size,
-)
-outputs = []
-for i in range(num_layers):
-    q = q_at_layer[i]
-    kv_cache = kv_cache_at_layer[i]
-    # compute batch prefill attention, reuse auxiliary data structures
-    o = prefill_wrapper.forward(
-        q, kv_cache, causal=True
-    )
-    outputs.append(o)
-
-# clear auxiliary data structures
-prefill_wrapper.end_forward()
-print(outputs[0].shape)
-print(kv_cache_at_layer[0,0,0])
-torch.Size([100, 64, 128])
-
-import torch
-import flashinfer
-nnz_kv = 10
-num_kv_heads = 4
-head_dim = 128
-k_append = torch.randn(nnz_kv, num_kv_heads, head_dim).half().to(0)
-v_append = torch.randn(nnz_kv, num_kv_heads, head_dim).half().to(0)
-# 45 + 8 + 25 + 22 = nnz_kv
-kv_append_length = torch.tensor([2, 3, 4, 1], dtype=torch.int32, device="cuda:0")
-kv_append_indptr = torch.cat(
-    [torch.zeros(1).int().to(0), torch.cumsum(kv_append_length, dim=0)]
-).int()
-max_num_pages = 4
-page_size = 256
-paged_kv_cache = torch.zeros(max_num_pages, 2, page_size, num_kv_heads, head_dim).half().to(0)
-num_pages_per_req = torch.tensor([1, 1, 1, 1], dtype=torch.int32, device="cuda:0")
-kv_page_indptr = torch.cat(
-    [torch.zeros(1).int().to(0), torch.cumsum(num_pages_per_req, dim=0)]
-).int()
-# use first 8 pages in the paged-kv
-kv_page_indices = torch.arange(4, dtype=torch.int32, device="cuda:0")
-# 45 = (3 - 1) * 16 + 13
-# 8 = (1 - 1) * 16 + 8
-# 25 = (2 - 1) * 16 + 9
-# 22 = (2 - 1) * 16 + 6
-kv_last_page_len = torch.tensor([3, 4, 4, 3], dtype=torch.int32, device="cuda:0")
+cache_lens = torch.zeros(max_batch_size, dtype=torch.int32, device=device)
 
 
-flashinfer.append_paged_kv_cache(
-    k_append,
-    v_append,
-    kv_append_indptr,
-    paged_kv_cache,
-    kv_page_indices,
-    kv_page_indptr,
-    kv_last_page_len
+q_flashinfer = torch.randn(max_batch_size*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
+q_flashattn = q_flashinfer.reshape(max_batch_size, dec_len, num_qo_heads, head_dim)
+k_flashinfer = torch.randn(max_batch_size*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
+k_flashattn = k_flashinfer.reshape(max_batch_size, dec_len, num_qo_heads, head_dim)
+v_flashinfer = torch.randn(max_batch_size*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
+v_flashattn = v_flashinfer.reshape(max_batch_size, dec_len, num_qo_heads, head_dim)
+
+
+kv_cache_flash_infer= torch.zeros(
+     max_batch_size, 2, max_len, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda:0"
 )
+
+k_cache_flash_attn= torch.zeros(
+     max_batch_size, max_len, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda:0"
+)
+v_cache_flash_attn= torch.zeros(
+     max_batch_size, max_len, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda:0"
+)
+
+print(flash_attn_with_kvcache(q_flashattn, k_cache_flash_attn, v_cache_flash_attn, k_flashattn, v_flashattn, causal=True, cache_seqlens=cache_lens))
+
+decode_wrapper.begin_forward(
+                qo_indptr=qo_indptr*dec_len,
+                paged_kv_indptr=paged_kv_indptr,
+                paged_kv_indices=paged_kv_indices,
+                paged_kv_last_page_len=cache_lens+dec_len,
+                num_qo_heads=num_qo_heads, num_kv_heads=num_kv_heads, head_dim=head_dim, page_size=max_len, q_data_type=torch.float16)
+
+kv_append_indptr = torch.arange(max_batch_size+1, dtype=torch.int32, device=device)
+flashinfer.append_paged_kv_cache(k_flashinfer, v_flashinfer, kv_append_indptr*dec_len, kv_cache_flash_infer, paged_kv_indices, paged_kv_indptr, cache_lens+dec_len)
+
+print(decode_wrapper.forward(q_flashinfer, kv_cache_flash_infer, causal=True))
+decode_wrapper.end_forward()
+
+
+
