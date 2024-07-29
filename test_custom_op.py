@@ -363,7 +363,7 @@ for dec_len in [1,2,3,4,5,6,7,8]:
                     paged_kv_indptr=paged_kv_indptr,
                     paged_kv_indices=paged_kv_indices,
                     paged_kv_last_page_len=paged_kv_last_page_len,
-                    num_qo_heads=num_qo_heads, num_kv_heads=num_kv_heads, head_dim=head_dim, page_size=max_len, q_data_type=torch.float16)
+                    num_qo_heads=num_qo_heads, num_kv_heads=num_kv_heads, head_dim=head_dim, page_size=max_len, q_data_type=torch.bfloat16)
 
      torch.cuda.synchronize()
      start = time.perf_counter()
