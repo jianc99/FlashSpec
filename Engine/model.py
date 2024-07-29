@@ -205,8 +205,8 @@ class Attention(nn.Module):
         k = k.contiguous().view(bsz*seqlen, self.n_local_heads, self.head_dim)
         v = v.contiguous().view(bsz*seqlen, self.n_local_heads, self.head_dim)
 
-        q = apply_rotary_emb(q, freqs_cis)
-        k = apply_rotary_emb(k, freqs_cis)
+        # q = apply_rotary_emb(q, freqs_cis)
+        # k = apply_rotary_emb(k, freqs_cis)
 
         kv_cahce = self.kv_cache.update(k, v, cache_seqlens)
 
