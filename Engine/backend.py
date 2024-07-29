@@ -91,11 +91,11 @@ class LMBackend:
             )
             logits = self.model_forward[dec_len](
                 model=self.model, 
-                x=input_ids.flatten().clone(),
+                x=input_ids.clone(),
                 cache_seqlens= self.cachelens.clone(),
-                position_ids = position_ids.flatten().clone()) if dec_len in self.model_forward.keys() else self.model.forward(input_ids.clone(), self.cachelens.clone())
+                position_ids = position_ids.clone()) if dec_len in self.model_forward.keys() else self.model.forward(input_ids.clone(), self.cachelens.clone())
             self.decode_wrapper.end_forward()
-            return logits.view(bsz, dec_len, -1)
+            return logits
     
     @torch.inference_mode()
     def encode(self, input_ids: torch.LongTensor):
