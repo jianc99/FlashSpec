@@ -324,72 +324,86 @@ import flashinfer
 #     kv_page_indptr,
 #     kv_last_page_len
 # )
-import random
-seed=1234
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-random.seed(seed)
-torch.backends.cudnn.deterministic = True
+# import random
+# seed=1234
+# torch.manual_seed(seed)
+# torch.cuda.manual_seed_all(seed)
+# random.seed(seed)
+# torch.backends.cudnn.deterministic = True
+
+import time
 
 
-from flash_attn import flash_attn_with_kvcache
-
-max_batch_size = 2
-dec_len = 20
+# from flash_attn import flash_attn_with_kvcache
+bsz = 128
 device = torch.device("cuda:0")
 decode_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=device)
-qo_indptr = torch.arange(max_batch_size+1, dtype=torch.int32, device=device)
-paged_kv_indptr = torch.arange(max_batch_size+1, dtype=torch.int32, device=device)
-paged_kv_indices = torch.arange(max_batch_size, dtype=torch.int32, device=device)
-paged_kv_last_page_len = torch.zeros((max_batch_size), dtype=torch.int32, device=device)
-decode_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(decode_buffer, "NHD", use_cuda_graph=True,
-                                                                        qo_indptr_buf=qo_indptr.clone(), 
-                                                                        paged_kv_indptr_buf = paged_kv_indptr.clone(), 
-                                                                        paged_kv_indices_buf=paged_kv_indices.clone(), 
-                                                                        paged_kv_last_page_len_buf=paged_kv_last_page_len.clone())
+decode_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(decode_buffer, "NHD")
 
-num_layers = 32
 num_qo_heads = 32
-num_kv_heads = 32
+num_kv_heads = 8
 head_dim = 128
-max_len = 4096
+max_len = 16016
 
-cache_lens = torch.zeros(max_batch_size, dtype=torch.int32, device=device)
-
-
-q_flashinfer = torch.randn(max_batch_size*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
-q_flashattn = q_flashinfer.reshape(max_batch_size, dec_len, num_qo_heads, head_dim)
-k_flashinfer = torch.randn(max_batch_size*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
-k_flashattn = k_flashinfer.reshape(max_batch_size, dec_len, num_qo_heads, head_dim)
-v_flashinfer = torch.randn(max_batch_size*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
-v_flashattn = v_flashinfer.reshape(max_batch_size, dec_len, num_qo_heads, head_dim)
-
-
-kv_cache_flash_infer= torch.zeros(
-     max_batch_size, 2, max_len, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda:0"
+kv_cache_flash_infer= torch.randn(
+     bsz, 2, max_len, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda:0"
 )
 
-k_cache_flash_attn= torch.zeros(
-     max_batch_size, max_len, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda:0"
-)
-v_cache_flash_attn= torch.zeros(
-     max_batch_size, max_len, num_kv_heads, head_dim, dtype=torch.bfloat16, device="cuda:0"
-)
-
-print(flash_attn_with_kvcache(q_flashattn, k_cache_flash_attn, v_cache_flash_attn, k_flashattn, v_flashattn, causal=True, cache_seqlens=cache_lens))
-
-decode_wrapper.begin_forward(
-                qo_indptr=qo_indptr*dec_len,
-                paged_kv_indptr=paged_kv_indptr,
-                paged_kv_indices=paged_kv_indices,
-                paged_kv_last_page_len=cache_lens+dec_len,
-                num_qo_heads=num_qo_heads, num_kv_heads=num_kv_heads, head_dim=head_dim, page_size=max_len, q_data_type=torch.float16)
-
-kv_append_indptr = torch.arange(max_batch_size+1, dtype=torch.int32, device=device)
-flashinfer.append_paged_kv_cache(k_flashinfer, v_flashinfer, kv_append_indptr*dec_len, kv_cache_flash_infer, paged_kv_indices, paged_kv_indptr, cache_lens+dec_len)
-
-print(decode_wrapper.forward(q_flashinfer, kv_cache_flash_infer, causal=True))
-decode_wrapper.end_forward()
+qo_indptr = torch.arange(bsz+1, dtype=torch.int32, device=device)
+paged_kv_indptr = torch.arange(bsz+1, dtype=torch.int32, device=device)
+paged_kv_indices = torch.arange(bsz, dtype=torch.int32, device=device)
+paged_kv_last_page_len = torch.zeros((bsz), dtype=torch.int32, device=device) + 16000
 
 
+for dec_len in [1,2,3,4,5,6,7,8]:
+     q_flashinfer = torch.randn(bsz*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
 
+     decode_wrapper.begin_forward(
+                    qo_indptr=qo_indptr*dec_len,
+                    paged_kv_indptr=paged_kv_indptr,
+                    paged_kv_indices=paged_kv_indices,
+                    paged_kv_last_page_len=paged_kv_last_page_len,
+                    num_qo_heads=num_qo_heads, num_kv_heads=num_kv_heads, head_dim=head_dim, page_size=max_len, q_data_type=torch.float16)
+
+     torch.cuda.synchronize()
+     start = time.perf_counter()
+     for _ in range(1000):
+          decode_wrapper.forward(q_flashinfer, kv_cache_flash_infer, causal=True)
+     torch.cuda.synchronize()
+     end = time.perf_counter()
+
+     decode_wrapper.end_forward()
+     print((end - start)/1000)
+
+# import torch._dynamo.config
+# import torch._inductor.config
+# torch._inductor.config.coordinate_descent_tuning = True
+# torch._inductor.config.triton.unique_kernel_names = True
+# torch._inductor.config.fx_graph_cache = True # Experimental feature to reduce compilation times, will be on by default in future
+
+# rope = flashinfer.apply_rope
+
+# torch.library.define(
+#      "mylib::target_rope",
+#      "(Tensor q, Tensor k, Tensor indptr, Tensor offsets) -> (Tensor, Tensor)",
+# )
+# @torch.library.impl("mylib::target_rope", "cuda")
+# def target_rope(q, k, indptr, offsets):
+#      return rope(q, k, indptr, offsets, interleave=True)
+
+
+# @torch.library.register_fake("mylib::target_rope")
+# def target_rope_abstract(q, k, indptr, offsets):
+#      return torch.empty_like(q), torch.empty_like(k)
+
+# q = torch.randn(4, 4, 128, dtype=torch.bfloat16).to(0)
+# k = torch.randn(4, 1, 128, dtype=torch.bfloat16).to(0)
+# v = torch.randn(4, 1, 128, dtype=torch.bfloat16).to(0)
+
+# indptr = torch.arange(5, dtype=torch.int32).to(0)
+# offsets = torch.full((4,), 1, dtype=torch.int32).to(0)
+# # kv_cache = torch.randn(4, 2, 4, 4, 128, dtype=torch.bfloat16).to(0)
+# # print(q, k)
+
+# q_rope, k_rope = torch.compile(torch.ops.mylib.target_rope, mode="reduce-overhead", fullgraph=True)(q, k, indptr, offsets)
+# # print(q_rope, k_rope)
