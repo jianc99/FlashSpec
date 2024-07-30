@@ -196,23 +196,23 @@ class Attention(nn.Module):
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
 
     def forward(self, x: Tensor, cache_seqlens: Tensor, freqs_cis: Tensor) -> Tensor:
-        bsz, seqlen, _ = x.shape
+        seqlen, _ = x.shape
 
         kv_size = self.n_local_heads * self.head_dim
         q, k, v = self.wqkv(x).split([self.dim, kv_size, kv_size], dim=-1)
 
-        q = q.contiguous().view(bsz*seqlen, self.n_head, self.head_dim)
-        k = k.contiguous().view(bsz*seqlen, self.n_local_heads, self.head_dim)
-        v = v.contiguous().view(bsz*seqlen, self.n_local_heads, self.head_dim)
+        q = q.contiguous().view(seqlen, self.n_head, self.head_dim)
+        k = k.contiguous().view(seqlen, self.n_local_heads, self.head_dim)
+        v = v.contiguous().view(seqlen, self.n_local_heads, self.head_dim)
 
-        # q = apply_rotary_emb(q, freqs_cis)
-        # k = apply_rotary_emb(k, freqs_cis)
+        q = apply_rotary_emb(q, freqs_cis)
+        k = apply_rotary_emb(k, freqs_cis)
 
         kv_cahce = self.kv_cache.update(k, v, cache_seqlens)
 
         y = self.attn_forward_decode(q, kv_cahce)
 
-        y = y.contiguous().view(bsz, seqlen, self.dim)
+        y = y.contiguous().view(seqlen, self.dim)
 
         y = self.wo(y)
         if self.process_group != None:
