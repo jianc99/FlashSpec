@@ -7,10 +7,9 @@ export OMP_NUM_THREADS=48
 
 # torchrun --standalone --nproc_per_node=1 --master_port=13456 tests/test_latency.py --M 512 --declen_list 1 --P 511 --B 128 --checkpoint_path /home/jianc2/FastHesse/checkpoints/TinyLlama/TinyLlama_v1.1/model.pth --rank_group 0 --compile
 
-ENABLE_INTRA_NODE_COMM=1 torchrun --standalone --nproc_per_node=1 tests/test_latency.py --M 256 --declen_list 1 --P 240 --B 2 --checkpoint_path ../FastHesse/checkpoints/meta-llama/Llama-2-7b-hf/model.pth --rank_group 0 --compile
+ENABLE_INTRA_NODE_COMM=1 torchrun --standalone --nproc_per_node=8 tests/test_latency.py --M 4006 --declen_list 5 --P 4000 --B 264 --checkpoint_path checkpoints/meta-llama/Llama-2-7b-hf/model.pth --rank_group 0 1 2 3 4 5 6 7 --compile
 
-ENABLE_INTRA_NODE_COMM=1 torchrun --standalone --nproc_per_node=4 tests/test_latency.py --M 16024 --declen_list 5 --P 16000 --B 64 --checkpoint_path checkpoints/gradientai/Llama-3-8B-Instruct-Gradient-1048k/model.pth --rank_group 0 1 2 3 --compile
-
+ENABLE_INTRA_NODE_COMM=1 torchrun --standalone --nproc_per_node=8 tests/test_latency.py --M 16024 --declen_list 5 --P 16000 --B 264 --checkpoint_path checkpoints/gradientai/Llama-3-8B-Instruct-Gradient-1048k/model.pth --rank_group 0 1 2 3 4 5 6 7 --compile
 
 ENABLE_INTRA_NODE_COMM=1 torchrun --standalone --nproc_per_node=4 tests/test_latency.py --M 16024 --declen_list 4 --P 16000 --B 32 --checkpoint_path checkpoints/gradientai/Llama-3-8B-Instruct-Gradient-1048k/model.pth --rank_group 0 1 2 3 --compile
 
