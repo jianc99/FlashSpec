@@ -6,7 +6,7 @@ import flashinfer
 
 torch.library.define(
     "mylib::update_kv",
-    "(Tensor k, Tensor v, Tensor kv_append_indptr, Tensor(a!) kv_cache, Tensor kv_page_indices, Tensor kv_page_indptr, Tensor cachelen) -> Tensor",
+    "(Tensor k, Tensor v, Tensor kv_append_indptr, Tensor(a!) kv_cache, Tensor kv_page_indices, Tensor kv_page_indptr, Tensor cachelen) -> ()",
 )
 
 @torch.library.impl("mylib::update_kv", "cuda")
@@ -28,7 +28,6 @@ def update_kv(
             kv_page_indptr,
             cachelen
         )
-        return kv_cache
 
 @torch.library.register_fake("mylib::update_kv")
 def update_kv_abstract(
@@ -40,7 +39,7 @@ def update_kv_abstract(
             kv_page_indptr,
             cachelen
         ):
-    return torch.empty_like(kv_cache)
+    return None
 
 def get_sampling_logits(logits :torch.Tensor, top_p:float, T: float, replicate = False):
     if replicate:

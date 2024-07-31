@@ -41,7 +41,7 @@ def convert_pg19_dataset(tokenizer, seq_len = 4096):
     d_files = os.listdir(datasetparent)
     dataset = load_dataset("json", data_files = [datasetparent + name for name in d_files], split = "train")
     tokenized_prompts = []
-    for i in tqdm(range(0,20)):
+    for i in tqdm(range(0,1)):
         prompt = dataset[i]['text']
         tokenized_prompt = tokenizer.encode(prompt, return_tensors="pt").split(seq_len, dim=-1)[2:-1]
         for i in range(len(tokenized_prompt)):

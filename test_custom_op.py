@@ -358,21 +358,21 @@ paged_kv_last_page_len = torch.zeros((bsz), dtype=torch.int32, device=device) + 
 for dec_len in [1,2,3,4,5,6,7,8]:
      q_flashinfer = torch.randn(bsz*dec_len, num_qo_heads, head_dim, dtype=torch.bfloat16).to("cuda:0")
 
-     torch.cuda.synchronize()
-     start = time.perf_counter()
      decode_wrapper.begin_forward(
                     qo_indptr=qo_indptr*dec_len,
                     paged_kv_indptr=paged_kv_indptr,
                     paged_kv_indices=paged_kv_indices,
                     paged_kv_last_page_len=paged_kv_last_page_len,
-                    num_qo_heads=num_qo_heads, num_kv_heads=num_kv_heads, head_dim=head_dim, page_size=max_len, q_data_type=torch.bfloat16)
+                    num_qo_heads=num_qo_heads, num_kv_heads=num_kv_heads, head_dim=head_dim, page_size=max_len, q_data_type=torch.float16)
 
+     torch.cuda.synchronize()
+     start = time.perf_counter()
      for _ in range(1000):
           decode_wrapper.forward(q_flashinfer, kv_cache_flash_infer, causal=True)
-
-     decode_wrapper.end_forward()
      torch.cuda.synchronize()
      end = time.perf_counter()
+
+     decode_wrapper.end_forward()
      print((end - start)/1000)
 
 # import torch._dynamo.config
