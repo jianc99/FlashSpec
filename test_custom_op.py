@@ -124,11 +124,11 @@ for dec_len in range(1, 4):
     torch.cuda.synchronize()
     t1 = time.perf_counter()
     for i in range(1000):
-        res, softmax = flash_attn_with_kvcache(q, k_cache, v_cache, k, v, cache_seqlens = cache_seqlens, causal=True, return_softmax_lse=True)
+        flash_attn_with_kvcache(q, k_cache, v_cache, k, v, cache_seqlens = cache_seqlens, causal=True)
     torch.cuda.synchronize()
     t2 = time.perf_counter()
     print((t2-t1)/1000)
-    print(softmax.shape)
+    # print(softmax.shape)
 
     torch.cuda.synchronize()
     t1 = time.perf_counter()

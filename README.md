@@ -15,7 +15,7 @@ conda activate flashspec
 # 2.5.0.dev20240622+cu124
 # pip install torch==2.5.0.dev20240622+cu124 --index-url https://download.pytorch.org/whl/nightly/cu124/
 # torch-2.5.0.dev20240627+cu121-cp311-cp311-linux_x86_64.whl
-pip install torch==2.5.0.dev20240720+cu121 --index-url https://download.pytorch.org/whl/nightly/cu121/
+pip install torch==2.5.0.dev20240813+cu121 --index-url https://download.pytorch.org/whl/nightly/cu121/
 pip install transformers==4.36.2
 pip install numpy==1.26.3
 pip install protobuf
