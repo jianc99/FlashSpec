@@ -304,6 +304,8 @@ def precompute_freqs_cis(
     t = torch.arange(seq_len, device=freqs.device)
     if use_scaled:
         freqs = apply_scaling(freqs)
+    else:
+        freqs /= scaling_factor
     freqs = torch.outer(t, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
     cache = torch.stack([freqs_cis.real, freqs_cis.imag], dim=-1)
