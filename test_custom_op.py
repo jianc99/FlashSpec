@@ -154,7 +154,7 @@ for dec_len in range(1, 4):
     torch.cuda.synchronize()
     t1 = time.perf_counter()
     for i in range(1000):
-        flash_attn_with_kvcache(q, k_cache, v_cache, k, v, cache_seqlens = cache_seqlens, causal=True, return_softmax_lse=False)
+        flash_attn_with_kvcache(q, k_cache, v_cache, k, v, cache_seqlens = cache_seqlens, causal=True)
     torch.cuda.synchronize()
     t2 = time.perf_counter()
     print((t2-t1)/1000)
