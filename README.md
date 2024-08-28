@@ -26,7 +26,7 @@ pip install wandb
 pip install tiktoken
 pip install packaging
 pip install ninja
-pip install flash-attn --no-build-isolation
+pip install --no-cache-dir flash-attn --no-build-isolation
 ```
 
 ## Run Scripts
