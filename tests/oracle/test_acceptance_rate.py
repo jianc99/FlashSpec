@@ -125,7 +125,8 @@ for step, batch in pbar:
         logits = outputs.logits[:, -1]
         logits = get_sampling_logits(logits, P, T, replicate=False)
         logits = torch.nn.functional.softmax(logits/T, dim=-1)
-        new_token = torch.multinomial(logits, num_samples=1)
+        # new_token = torch.multinomial(logits, num_samples=1)
+        new_token = torch.argmax(logits, dim=-1, keepdim=True)    # greedy
         
         if new_token.item() in eos_tokens: break
         tokens = torch.cat([tokens, new_token], dim=1)
@@ -135,20 +136,27 @@ for step, batch in pbar:
             logits = outputs.logits[:, -1]
             logits = get_sampling_logits(logits, P, T, replicate=False)
             logits = torch.nn.functional.softmax(logits/T, dim=-1)
-            new_token = torch.multinomial(logits, num_samples=1)
+            # new_token = torch.multinomial(logits, num_samples=1)
+            new_token = torch.argmax(logits, dim=-1, keepdim=True)    # greedy
             if new_token.item() in eos_tokens: break
             tokens = torch.cat([tokens, new_token], dim=1)
 
         '''
+        # outputs = model.generate(input_ids=input_ids, 
+        #                          do_sample=True,
+        #                          temperature=T,
+        #                          top_p=P,
+        #                          max_new_tokens=max_gen_toks, 
+        #                          return_dict_in_generate=True,
+        #                          eos_token_id=eos_tokens,)
         outputs = model.generate(input_ids=input_ids, 
-                                 do_sample=True,
-                                 temperature=T,
-                                 top_p=P,
+                                 do_sample=False, 
                                  max_new_tokens=max_gen_toks, 
-                                 return_dict_in_generate=True,
-                                 eos_token_id=eos_tokens,)
+                                 eos_token_id=eos_tokens,
+                                 return_dict_in_generate=True)
         tokens = outputs.sequences
         '''
+
         num_samples = tokens.shape[1] - initial_len 
 
         past_key_values = DynamicCache.from_legacy_cache(outputs.past_key_values)   

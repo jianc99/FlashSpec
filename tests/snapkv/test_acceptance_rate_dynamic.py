@@ -12,7 +12,7 @@ from FlashSpec.Data.data_converter import convert_pg19_dataset  #, LongBenchData
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.cache_utils import DynamicCache
 
-from FlashSpec.Engine.snapkv.cache_utils import SnapKVCache
+from FlashSpec.Engine.snapkv.cache_dynamic_utils import DynamicSnapKVCache
 from FlashSpec.Engine.snapkv.model_utils import enable_snap, disable_snap
 
 from torch.utils.data.dataloader import DataLoader
@@ -30,6 +30,7 @@ parser.add_argument('--dataset', type=str, default="pg19", help='Dataset to use.
 parser.add_argument('--budget', type=int, default=256, help='KV Budget.')
 parser.add_argument('--window_size', type=int, default=16, help='Window size.')
 parser.add_argument('--kernel_size', type=int, default=5, help='Kernel size.')
+parser.add_argument('--gamma', type=int, default=5, help='Gamma.')
 
 parser.add_argument('--prefix_len', type=int, default=4000, help='Prefix length')
 parser.add_argument('--gen_len', type=int, default=64, help='Generate length')
@@ -114,9 +115,6 @@ position_wise_samples = torch.zeros(args.gen_len, device=DEVICE)
 total_samples = 0
 iterative = args.prefix_len > 50_000
 
-# THINK expts
-dimwise_imps = [[] for _ in range(model.config.num_hidden_layers)]
-
 pbar = tqdm(enumerate(dataloader), total=num_eval_steps)
 for step, batch in pbar:
     if step >= num_eval_steps:
@@ -183,23 +181,23 @@ for step, batch in pbar:
 
         window_size = args.window_size
         past_key_values.crop(initial_len - window_size)
-        past_key_values = SnapKVCache.from_fullcache(past_key_values, window_size, args.kernel_size, args.budget)
+        past_key_values = DynamicSnapKVCache.from_fullcache(past_key_values, window_size, args.kernel_size, args.budget)
 
         enable_snap(model)
 
         # observe
-        model(input_ids=tokens[:, initial_len-window_size:initial_len], past_key_values=past_key_values, use_cache=True)
+        outputs = model(input_ids=tokens[:, initial_len-window_size:initial_len], past_key_values=past_key_values, use_cache=True)
+        past_key_values = outputs.past_key_values
 
-        # collect think scores
-        # for layer_idx in range(2, model.config.num_hidden_layers):
-        #     dim_imp = past_key_values.dim_imp_stats[layer_idx-2]
-        #     dimwise_imps[layer_idx-2].append(dim_imp.cpu().numpy())
+        chunk_size = args.gamma + 1
+
+        draft_logits = torch.zeros_like(target_logits)
+        for i in range(0, num_samples, chunk_size):
+            outputs = model(input_ids=tokens[:, i+initial_len:i+chunk_size+initial_len], past_key_values=past_key_values, use_cache=True)
+            past_key_values = outputs.past_key_values
+            draft_logits[:, i:i+chunk_size] = outputs.logits
 
         disable_snap(model)
-        # assert past_key_values.get_seq_length() == initial_len
-        assert past_key_values.get_seq_length(2) == args.budget # snapping starts from layer 2
-
-        draft_logits = model(input_ids=tokens[:, initial_len:], past_key_values=past_key_values, use_cache=True).logits
 
         target_logits = get_sampling_logits(target_logits, P, T, replicate=False)
 
@@ -211,48 +209,14 @@ for step, batch in pbar:
         acceptance_rate = probas.sum(dim=-1)    # [B, S]
         
         total_acceptance_rate = acceptance_rate.sum(dim=-1) 
-        position_wise_acceptance_rates[:num_samples] += acceptance_rate.sum(dim=0)
-        position_wise_samples[:num_samples] += acceptance_rate.shape[0]
         total_acceptance_rate = total_acceptance_rate.cumsum_(dim=0)
 
         if args.printoutput:
             # print last 10 input tokens in red color, and print new tokens in green color
             print(colored(tokenizer.decode(input_ids[0, -10:], skip_special_tokens=True), "red"), colored(tokenizer.decode(tokens[0, -num_samples:], skip_special_tokens=True), "green"))
             
-        gc.collect()
-        torch.cuda.empty_cache()
-        
     agg_acc_rate += total_acceptance_rate[0] 
     total_samples += num_samples
     pbar.set_description("acc rate: {:.2f}".format(agg_acc_rate / total_samples))
 
 print("acc rate: ", agg_acc_rate / total_samples)
-'''
-position_wise_acceptance_rates /= position_wise_samples
-print(position_wise_samples)
-position_wise_acceptance_rates = position_wise_acceptance_rates.cpu().numpy()
-position_wise_acceptance_rates = np.ma.masked_array(position_wise_acceptance_rates, np.isnan(position_wise_acceptance_rates))
-# plt.plot(np.arange(args.gen_len), position_wise_acceptance_rates)
-pos = np.arange(args.gen_len)[::10]
-position_wise_acceptance_rates = position_wise_acceptance_rates[::10]
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.plot(pos, position_wise_acceptance_rates, marker="o")
-ax.set_xlabel("Position")
-ax.set_ylabel("Acceptance Rate")
-ax.set_title(f"prefill={args.prefix_len}, budget={args.budget}")
-ax.grid()
-plt.savefig(f"acceptance_rate_prefill{args.prefix_len}_budget{args.budget}.png")
-
-num_heads = model.config.num_key_value_heads
-D = model.config.hidden_size // model.config.num_attention_heads
-for layer_idx in range(2, model.config.num_hidden_layers):
-    plt.clf()
-    layer_dim_imps = np.stack(dimwise_imps[layer_idx-2], axis=0).mean(axis=0)
-    for h in range(num_heads):
-        plt.hist(layer_dim_imps[h], bins=50, alpha=0.5, label=f"Head {h}")
-    plt.legend()
-    plt.xlabel("Dimension")
-    plt.ylabel("Importance")
-    plt.title(f"Dimension-wise importance for layer {layer_idx}")
-    plt.savefig(f"dim_imp_layer_{layer_idx}.png")
-'''

@@ -4,6 +4,7 @@ import torch
 import math
 from transformers.models.llama.modeling_llama import repeat_kv
 import torch.nn.functional as F
+from ..kivi.quant.new_pack import quant_and_pack_kcache, quant_and_pack_vcache, unpack_and_dequant_kcache, unpack_and_dequant_vcache
 
 class SnapKVCache(DynamicCache):
     def __init__(self, window_size: int=16, kernel_size: int=5, budget: int=1024):
@@ -12,7 +13,14 @@ class SnapKVCache(DynamicCache):
         self.kernel_size = kernel_size
         self.budget = budget
         self.non_snap_layers = 2
-        self.pooling_type = "max"
+        self.pooling_type = "avg"
+        self.use_think = False
+        self.think_prune = 0.6
+
+        self.use_kivi = False
+        self.k_bits = 2
+        self.v_bits = 2
+        self.group_size = 32
 
     def update(
         self,
@@ -68,10 +76,8 @@ class SnapKVCache(DynamicCache):
         ret_values = torch.cat([past_value_states, value_states], dim=-2)
         new_key_states = torch.cat([past_key_states, key_states], dim=-2)
         new_key_states = repeat_kv(new_key_states, kv_repeats)
-        new_value_states = torch.cat([past_value_states, value_states], dim=-2)
-        new_value_states = repeat_kv(new_value_states, kv_repeats)
         scale_factor = 1 / math.sqrt(D)
-        
+
         S = new_key_states.shape[-2]
         attn_bias = torch.zeros(L, S, dtype=key_states.dtype)
         # create a causal mask
@@ -83,8 +89,6 @@ class SnapKVCache(DynamicCache):
         attn_scores = torch.einsum("bhld,bhsd->bhls", query_states, new_key_states) * scale_factor
         attn_scores += attn_bias
         attn_scores = F.softmax(attn_scores, dim=-1)
-
-        # attn_output = torch.einsum("bhls,bhsd->bhld", attn_scores, new_value_states)
         
         vote = attn_scores[..., :-L].sum(dim=-2)    # summed across all the observed queries
         if self.pooling_type == "max":
@@ -96,14 +100,33 @@ class SnapKVCache(DynamicCache):
         indices = pool_vote.topk(self.budget - L, dim=-1).indices
         indices = indices.unsqueeze(-1).expand(-1, -1, -1, D)
 
-        
         selected_past_key = past_key_states.gather(dim=-2, index=indices)
         selected_past_value = past_value_states.gather(dim=-2, index=indices)
+
+        del attn_scores
+
+        if self.use_think:
+            attn_dimwise = torch.einsum("bhld,bhsd->bhlsd", query_states, new_key_states)
+            attn_dimwise = attn_dimwise.reshape(B, num_heads, -1, D).transpose(-1, -2)
+            attn_dimwise = torch.norm(attn_dimwise, p=2, dim=-1)
+            attn_dimwise = attn_dimwise.reshape(B, num_kv_heads, -1, D).mean(dim=-2)
+            topk_dim = int(D * self.think_prune)
+            topk_dim_ids = attn_dimwise.topk(topk_dim, dim=-1).indices # B x num_kv_heads x topk_dim
+            bin_mask = torch.zeros(B, num_kv_heads, D, dtype=torch.bool, device=key_states.device)
+            bin_mask.scatter_(-1, topk_dim_ids, 1)
+            bin_mask = bin_mask.unsqueeze(-2).expand(-1, -1, self.budget - L, -1)
+            selected_past_key.masked_fill_(bin_mask.logical_not(), 0)
+
+        if self.use_kivi:
+            key_code, key_scale, key_mn = quant_and_pack_kcache(selected_past_key, self.group_size, self.k_bits)
+            selected_past_key = unpack_and_dequant_kcache(key_code, key_scale, key_mn, self.group_size, self.k_bits)
+            value_code, value_scale, value_mn = quant_and_pack_vcache(selected_past_value, self.group_size, self.v_bits)
+            selected_past_value = unpack_and_dequant_vcache(value_code, value_scale, value_mn, self.group_size, self.v_bits)
+
         self.key_cache[layer_idx] = torch.cat([selected_past_key, key_states], dim=-2)
-        self.value_cache[layer_idx] = torch.cat([selected_past_value, value_states], dim=-2)
+        self.value_cache[layer_idx] = torch.cat([selected_past_value, value_states], dim=-2) 
 
         return ret_keys, ret_values
-        # return attn_output
 
 
     @classmethod
