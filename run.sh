@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 python3 tests/snapspec_benchmark.py --model /scratch/checkpoints/meta-llama/Meta-Llama-3.1-8B/model.pth --model_name meta-llama/Meta-Llama-3.1-8B --snap_budget 4096 --window_size 64 --kernel_size 1 --rank_group -1 --gamma 5 --B 1 --prefix_len 32000 --gen_len 64 --printoutput --benchmark
